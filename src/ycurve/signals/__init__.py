@@ -1,0 +1,1 @@
+"""Signal construction utilities."""
