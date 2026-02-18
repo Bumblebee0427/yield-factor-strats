@@ -7,6 +7,7 @@ from ycurve.backtest.metrics import max_drawdown, sharpe
 from ycurve.backtest.pnl import pnl_from_dy
 from ycurve.factors.ae import LinearAutoencoder
 from ycurve.factors.mfa import fit_mfa, transform as transform_mfa
+from ycurve.factors.nmf import fit_nmf, transform as transform_nmf
 from ycurve.io.load import load_liu_wu
 from ycurve.portfolio.pc_neutral import pc_neutralize
 from ycurve.preprocess.split import time_split
@@ -76,3 +77,7 @@ def test_factor_placeholders_smoke() -> None:
     mfa = fit_mfa(X, n_components=2, random_state=1)
     f = transform_mfa(mfa, X)
     assert f.shape == (8, 2)
+
+    nmf = fit_nmf(X, n_components=2, random_state=1, max_iter=100)
+    g = transform_nmf(nmf, X)
+    assert g.shape == (8, 2)
