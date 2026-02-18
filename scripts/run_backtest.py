@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("PANDAS_NO_IMPORT_PYARROW", "1")
 
 import matplotlib.pyplot as plt
 import numpy as np

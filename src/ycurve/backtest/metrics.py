@@ -16,5 +16,7 @@ def sharpe(returns: np.ndarray, periods_per_year: int = 252) -> float:
 def max_drawdown(equity: np.ndarray) -> float:
     """Maximum drawdown of equity curve as negative fraction."""
     running_max = np.maximum.accumulate(equity)
-    drawdowns = equity / running_max - 1.0
+    safe_running_max = np.where(running_max == 0.0, 1.0, running_max)
+    drawdowns = equity / safe_running_max - 1.0
+    drawdowns = np.where(running_max == 0.0, 0.0, drawdowns)
     return float(drawdowns.min())

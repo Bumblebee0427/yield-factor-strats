@@ -1,35 +1,24 @@
-# Yield Curve Factor Modeling + PC-Neutral Fly (Baseline)
+# Yield Factor Strats (Template Baseline)
 
-This repository provides a clean, reproducible baseline for:
-- loading Liu–Wu yield data from CSV,
-- preprocessing into yield changes (`Δy`) with train-stat z-scoring,
-- fitting PCA factors,
-- constructing a 2y-5y-10y fly,
-- PC-neutralizing the fly against the first `k` PCs,
-- computing proxy PnL using `-w · Δy`,
-- reporting simple Sharpe and max drawdown.
+This project is an initial scaffold for yield-curve factor research and baseline backtesting.
+
+Current baseline workflow includes:
+- CSV loader for tenor yield curves
+- preprocessing to yield changes (`dy`) with train-stat z-score
+- PCA factor extraction
+- 2y-5y-10y fly construction and PC-neutralization
+- proxy PnL and basic metrics (Sharpe, max drawdown)
 
 ## Project structure
 
 ```text
-src/ycurve/
-  io/
-  preprocess/
-  factors/
-  signals/
-  portfolio/
-  backtest/
-  viz/
-scripts/
-configs/
-notebooks/
-data/
-  raw/
-  processed/
-  sample/
-results/
-  figures/
-  tables/
+src/ycurve/                      # research baseline pipeline
+src/yield_factor_strats/         # strategy/backtest template package
+scripts/                         # runnable entrypoints
+configs/                         # yaml config templates
+data/{raw,processed,sample}/
+results/{tables,figures}/
+tests/
 ```
 
 ## Setup
@@ -37,37 +26,19 @@ results/
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-<<<<<<< HEAD
 pip install -e .[dev]
 pytest
-python -m yield_factor_strats.pipelines.run_backtest
 ```
 
-## Next steps
+## Quick start
 
-- Plug in your preferred data loader (CSV, DB, API).
-- Implement signal generation for each factor bucket.
-- Expand transaction cost + risk overlays.
-- Add performance attribution and diagnostics.
-=======
-pip install -r requirements.txt
+If you do not have real data yet, generate a synthetic sample:
+
+```bash
+python scripts/make_sample_data.py
 ```
 
-## Data
-
-Put your dataset at:
-
-```text
-data/raw/liu_wu.csv
-```
-
-Expected format:
-- first column: date (parseable to datetime)
-- remaining columns: tenors in months (e.g., `24,60,120`) or tenor-like labels containing numbers (e.g., `24m`, `M24`)
-
-## Run pipeline
-
-From repo root:
+Then run the baseline pipeline:
 
 ```bash
 python scripts/run_preprocess.py
@@ -75,20 +46,28 @@ python scripts/run_pca.py
 python scripts/run_backtest.py
 ```
 
-## Expected outputs
+With real data, place CSV at:
 
-After running scripts, these files should appear:
+```text
+data/raw/liu_wu.csv
+```
 
-- `data/processed/dy.csv`
-- `data/processed/dy_train.csv`
-- `data/processed/dy_val.csv`
-- `data/processed/dy_test.csv`
-- `data/processed/dy_train_z.csv`
-- `data/processed/dy_val_z.csv`
-- `data/processed/dy_test_z.csv`
+Expected CSV format:
+- first column: date
+- remaining columns: tenor labels containing month numbers (e.g. `24`, `60`, `120`, `24m`, `M120`)
+
+## Outputs
+
+The baseline scripts write:
+- `data/processed/dy*.csv`
 - `results/tables/pca_loadings.csv`
 - `results/tables/pca_factors_train.csv`
 - `results/tables/fly_weights.csv`
 - `results/tables/equity_curve.csv`
 - `results/figures/equity_curve.png`
->>>>>>> origin/codex/build-rough-general-structure-2t68hb
+
+## Next steps
+
+- Replace placeholder factor models with production implementations.
+- Add transaction cost, execution lag, and risk budgeting.
+- Add richer evaluation (rolling stats, attribution, regime splits).
