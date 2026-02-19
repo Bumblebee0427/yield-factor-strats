@@ -1,4 +1,4 @@
-"""Simple nonlinear autoencoder implemented with NumPy."""
+"""Nonlinear autoencoder implemented with NumPy."""
 
 from __future__ import annotations
 
@@ -10,18 +10,32 @@ import pandas as pd
 
 @dataclass
 class NonlinearAutoencoder:
-    """Single-hidden-layer autoencoder with configurable nonlinear activation."""
+    """Two-hidden-layer nonlinear autoencoder with Adam optimization."""
 
     n_latent: int
-    activation: str = "tanh"
-    learning_rate: float = 1e-2
-    epochs: int = 800
+    activation: str = "relu"
+    learning_rate: float = 5e-4
+    epochs: int = 500
+    batch_size: int = 256
+    hidden_multiplier: int = 8
+    hidden_min: int = 32
+    l2_penalty: float = 1e-4
+    grad_clip: float = 5.0
+    validation_split: float = 0.1
+    early_stop_patience: int = 40
+    beta1: float = 0.9
+    beta2: float = 0.999
+    eps: float = 1e-8
     random_state: int = 7
 
     _w1: np.ndarray | None = None
     _b1: np.ndarray | None = None
     _w2: np.ndarray | None = None
     _b2: np.ndarray | None = None
+    _w3: np.ndarray | None = None
+    _b3: np.ndarray | None = None
+    _w4: np.ndarray | None = None
+    _b4: np.ndarray | None = None
     _columns: list[int] | None = None
 
     def fit(self, X: pd.DataFrame) -> "NonlinearAutoencoder":
@@ -30,46 +44,130 @@ class NonlinearAutoencoder:
         if self.n_latent <= 0 or self.n_latent > n_features:
             raise ValueError("n_latent must be between 1 and number of features.")
 
+        h = max(self.hidden_min, self.n_latent * self.hidden_multiplier)
         rng = np.random.default_rng(self.random_state)
-        self._w1 = rng.normal(0.0, 0.05, size=(n_features, self.n_latent))
-        self._b1 = np.zeros((1, self.n_latent), dtype=float)
-        self._w2 = rng.normal(0.0, 0.05, size=(self.n_latent, n_features))
-        self._b2 = np.zeros((1, n_features), dtype=float)
+
+        # Encoder: x -> h -> z, Decoder: z -> h -> x_hat
+        self._w1 = rng.normal(0.0, np.sqrt(2.0 / max(n_features, 1)), size=(n_features, h))
+        self._b1 = np.zeros((1, h), dtype=float)
+        self._w2 = rng.normal(0.0, np.sqrt(2.0 / max(h, 1)), size=(h, self.n_latent))
+        self._b2 = np.zeros((1, self.n_latent), dtype=float)
+        self._w3 = rng.normal(0.0, np.sqrt(2.0 / max(self.n_latent, 1)), size=(self.n_latent, h))
+        self._b3 = np.zeros((1, h), dtype=float)
+        self._w4 = rng.normal(0.0, np.sqrt(2.0 / max(h, 1)), size=(h, n_features))
+        self._b4 = np.zeros((1, n_features), dtype=float)
+
+        params: dict[str, np.ndarray] = {
+            "w1": self._w1,
+            "b1": self._b1,
+            "w2": self._w2,
+            "b2": self._b2,
+            "w3": self._w3,
+            "b3": self._b3,
+            "w4": self._w4,
+            "b4": self._b4,
+        }
+        m = {k: np.zeros_like(val) for k, val in params.items()}
+        v = {k: np.zeros_like(val) for k, val in params.items()}
+        t = 0
+
+        batch_size = n_samples if self.batch_size <= 0 else min(self.batch_size, n_samples)
+        val_size = int(n_samples * self.validation_split)
+        if val_size > 0 and val_size < n_samples:
+            perm = rng.permutation(n_samples)
+            val_idx = perm[:val_size]
+            train_idx = perm[val_size:]
+            x_train = x[train_idx]
+            x_val = x[val_idx]
+        else:
+            x_train = x
+            x_val = x
+        n_train = x_train.shape[0]
+        best_loss = np.inf
+        best_params = {k: vv.copy() for k, vv in params.items()}
+        stall = 0
 
         for _ in range(self.epochs):
-            a1 = x @ self._w1 + self._b1
-            z = self._activate(a1)
-            x_hat = z @ self._w2 + self._b2
+            order = rng.permutation(n_train)
+            for start in range(0, n_train, batch_size):
+                idx = order[start : start + batch_size]
+                xb = x_train[idx]
+                nb = xb.shape[0]
+                t += 1
 
-            dx_hat = (2.0 / n_samples) * (x_hat - x)
-            dw2 = z.T @ dx_hat
-            db2 = dx_hat.sum(axis=0, keepdims=True)
+                h1_pre = xb @ params["w1"] + params["b1"]
+                h1 = self._activate(h1_pre)
+                z = h1 @ params["w2"] + params["b2"]  # linear bottleneck
+                h2_pre = z @ params["w3"] + params["b3"]
+                h2 = self._activate(h2_pre)
+                x_hat = h2 @ params["w4"] + params["b4"]
 
-            dz = dx_hat @ self._w2.T
-            da1 = dz * self._activate_grad(a1)
-            dw1 = x.T @ da1
-            db1 = da1.sum(axis=0, keepdims=True)
+                dx_hat = (2.0 / nb) * (x_hat - xb)
+                grads: dict[str, np.ndarray] = {}
+                grads["w4"] = h2.T @ dx_hat + self.l2_penalty * params["w4"]
+                grads["b4"] = dx_hat.sum(axis=0, keepdims=True)
 
-            self._w1 -= self.learning_rate * dw1
-            self._b1 -= self.learning_rate * db1
-            self._w2 -= self.learning_rate * dw2
-            self._b2 -= self.learning_rate * db2
+                dh2 = dx_hat @ params["w4"].T
+                dh2_pre = dh2 * self._activate_grad(h2_pre)
+                grads["w3"] = z.T @ dh2_pre + self.l2_penalty * params["w3"]
+                grads["b3"] = dh2_pre.sum(axis=0, keepdims=True)
+
+                dz = dh2_pre @ params["w3"].T
+                grads["w2"] = h1.T @ dz + self.l2_penalty * params["w2"]
+                grads["b2"] = dz.sum(axis=0, keepdims=True)
+
+                dh1 = dz @ params["w2"].T
+                dh1_pre = dh1 * self._activate_grad(h1_pre)
+                grads["w1"] = xb.T @ dh1_pre + self.l2_penalty * params["w1"]
+                grads["b1"] = dh1_pre.sum(axis=0, keepdims=True)
+
+                for k in params:
+                    if self.grad_clip > 0:
+                        grads[k] = np.clip(grads[k], -self.grad_clip, self.grad_clip)
+                    m[k] = self.beta1 * m[k] + (1.0 - self.beta1) * grads[k]
+                    v[k] = self.beta2 * v[k] + (1.0 - self.beta2) * (grads[k] * grads[k])
+                    m_hat = m[k] / (1.0 - self.beta1**t)
+                    v_hat = v[k] / (1.0 - self.beta2**t)
+                    params[k] -= self.learning_rate * (m_hat / (np.sqrt(v_hat) + self.eps))
+
+            val_hat = self._forward_reconstruct(x_val, params)
+            val_loss = float(np.mean((val_hat - x_val) ** 2))
+            if val_loss < best_loss - 1e-8:
+                best_loss = val_loss
+                best_params = {k: vv.copy() for k, vv in params.items()}
+                stall = 0
+            else:
+                stall += 1
+                if stall >= self.early_stop_patience:
+                    break
+
+        self._w1, self._b1 = best_params["w1"], best_params["b1"]
+        self._w2, self._b2 = best_params["w2"], best_params["b2"]
+        self._w3, self._b3 = best_params["w3"], best_params["b3"]
+        self._w4, self._b4 = best_params["w4"], best_params["b4"]
 
         self._columns = [int(float(c)) for c in X.columns]
         return self
 
     def encode(self, X: pd.DataFrame) -> pd.DataFrame:
-        if self._w1 is None or self._b1 is None:
+        if self._w1 is None or self._b1 is None or self._w2 is None or self._b2 is None:
             raise ValueError("Model not fitted. Call fit() first.")
-        a1 = X.values.astype(float) @ self._w1 + self._b1
-        z = self._activate(a1)
+        h1 = self._activate(X.values.astype(float) @ self._w1 + self._b1)
+        z = self._activate(h1 @ self._w2 + self._b2)
         cols = [f"Z{i + 1}" for i in range(z.shape[1])]
         return pd.DataFrame(z, index=X.index, columns=cols)
 
     def decode(self, Z: pd.DataFrame) -> pd.DataFrame:
-        if self._w2 is None or self._b2 is None or self._columns is None:
+        if (
+            self._w3 is None
+            or self._b3 is None
+            or self._w4 is None
+            or self._b4 is None
+            or self._columns is None
+        ):
             raise ValueError("Model not fitted. Call fit() first.")
-        X_hat = Z.values.astype(float) @ self._w2 + self._b2
+        h2 = self._activate(Z.values.astype(float) @ self._w3 + self._b3)
+        X_hat = h2 @ self._w4 + self._b4
         return pd.DataFrame(X_hat, index=Z.index, columns=self._columns)
 
     def _activate(self, x: np.ndarray) -> np.ndarray:
@@ -77,6 +175,8 @@ class NonlinearAutoencoder:
             return np.tanh(x)
         if self.activation == "relu":
             return np.maximum(x, 0.0)
+        if self.activation == "leaky_relu":
+            return np.where(x > 0.0, x, 0.01 * x)
         if self.activation == "sigmoid":
             return 1.0 / (1.0 + np.exp(-x))
         raise ValueError(f"Unsupported activation: {self.activation}")
@@ -87,10 +187,20 @@ class NonlinearAutoencoder:
             return 1.0 - y * y
         if self.activation == "relu":
             return (x > 0.0).astype(float)
+        if self.activation == "leaky_relu":
+            out = np.ones_like(x)
+            out[x < 0.0] = 0.01
+            return out
         if self.activation == "sigmoid":
             y = 1.0 / (1.0 + np.exp(-x))
             return y * (1.0 - y)
         raise ValueError(f"Unsupported activation: {self.activation}")
+
+    def _forward_reconstruct(self, x: np.ndarray, params: dict[str, np.ndarray]) -> np.ndarray:
+        h1 = self._activate(x @ params["w1"] + params["b1"])
+        z = h1 @ params["w2"] + params["b2"]
+        h2 = self._activate(z @ params["w3"] + params["b3"])
+        return h2 @ params["w4"] + params["b4"]
 
 
 # Backward-compatible alias retained for existing imports/tests.

@@ -57,8 +57,15 @@ def _evaluate_all(
     ae = LinearAutoencoder(
         n_latent=n_components,
         activation="tanh",
-        learning_rate=5e-3,
+        learning_rate=3e-4,
         epochs=1200,
+        batch_size=512,
+        hidden_multiplier=24,
+        hidden_min=96,
+        l2_penalty=1e-5,
+        validation_split=0.05,
+        early_stop_patience=80,
+        grad_clip=0.0,
         random_state=7,
     ).fit(X_train)
     for split_name, X in [("train", X_train), ("val", X_val), ("test", X_test)]:
