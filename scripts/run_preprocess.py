@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -17,17 +18,36 @@ from ycurve.preprocess.split import time_split
 from ycurve.preprocess.transforms import standardize_train_apply, to_yield_changes
 
 
+def _keep_complete_tenors(yields):
+    keep = yields.columns[yields.notna().all(axis=0)]
+    if len(keep) == 0:
+        raise ValueError("No tenor columns are complete across all timestamps.")
+    return yields.loc[:, keep].copy()
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run preprocessing from a raw Liu-Wu CSV.")
+    parser.add_argument(
+        "--raw-file",
+        default="liu_wu1.csv",
+        help="CSV file under data/raw (default: liu_wu1.csv).",
+    )
+    parser.add_argument("--train-end", default="2015-12-31", help="Train split end date (inclusive).")
+    parser.add_argument("--val-end", default="2018-12-31", help="Validation split end date (inclusive).")
+    args = parser.parse_args()
+
     paths = default_paths()
-    raw_path = paths["data_raw"] / "liu_wu.csv"
+    raw_path = paths["data_raw"] / args.raw_file
 
     if not raw_path.exists():
         raise FileNotFoundError(f"Missing input file: {raw_path}")
 
     yields = load_liu_wu(str(raw_path))
+    yields = _keep_complete_tenors(yields)
     dy = to_yield_changes(yields)
+    dy = dy.dropna(how="any")
 
-    train, val, test = time_split(dy, train_end="2015-12-31", val_end="2018-12-31")
+    train, val, test = time_split(dy, train_end=args.train_end, val_end=args.val_end)
     train_z, (val_z, test_z), mean, std = standardize_train_apply(train, [val, test])
 
     out = paths["data_processed"]
@@ -46,6 +66,8 @@ def main() -> None:
     std.to_csv(out / "zscore_std.csv", header=["std"])
 
     print("Saved processed files to", out)
+    print(f"Raw source: {raw_path.name}")
+    print(f"Tenors retained: {len(yields.columns)} ({int(min(yields.columns))}m-{int(max(yields.columns))}m)")
 
 
 if __name__ == "__main__":
