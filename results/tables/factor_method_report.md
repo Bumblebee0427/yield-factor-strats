@@ -1,11 +1,17 @@
 # Factor Methods Comparison
 
+## Reconstruction Error Metric
+
+- MSE = mean((y_true - y_hat)^2) over all timestamps and tenors in each split.
+- MAE = mean(|y_true - y_hat|) over all timestamps and tenors in each split.
+- R2 = 1 - sum((y_true - y_hat)^2) / sum((y_true - mean(y_true))^2).
+- Ranking priority in this report: lower MSE first, then lower MAE.
+
 ## Datasets
 
-| dataset | n_samples | n_tenors | tenor_span_months | train_end | val_end |
-|---|---:|---:|---|---|---|
-| liu_wu1 | 9775 | 360 | 1-360 | 2015-12-31 | 2018-12-31 |
-| liu_wu_full | 15867 | 84 | 1-84 | 2015-12-31 | 2018-12-31 |
+| dataset | n_samples | n_tenors | tenor_span_months | source_period | dy_period | train/val/test_periods |
+|---|---:|---:|---|---|---|---|
+| liu_wu1 | 9775 | 360 | 1-360 | 1985-11-25..2024-12-31 | 1985-11-26..2024-12-31 | train:1985-11-26..2015-12-31 (7523); val:2016-01-04..2018-12-31 (749); test:2019-01-02..2024-12-31 (1503) |
 
 ## liu_wu1
 
@@ -35,32 +41,3 @@
 | 2 | MFA | 0.04237360 | 0.10799276 | 0.95588710 |
 | 3 | AE | 0.07035418 | 0.12848184 | 0.92675801 |
 | 4 | NMF | 0.14307215 | 0.22434922 | 0.85105521 |
-
-## liu_wu_full
-
-### train
-
-| rank | method | mse | mae | r2 |
-|---:|---|---:|---:|---:|
-| 1 | PCA | 0.06872624 | 0.14216898 | 0.93126872 |
-| 2 | MFA | 0.06872624 | 0.14216898 | 0.93126872 |
-| 3 | AE | 0.09518153 | 0.14688118 | 0.90481148 |
-| 4 | NMF | 0.16945892 | 0.24790483 | 0.83052864 |
-
-### val
-
-| rank | method | mse | mae | r2 |
-|---:|---|---:|---:|---:|
-| 1 | AE | 0.00544423 | 0.04990774 | 0.97656301 |
-| 2 | PCA | 0.00581159 | 0.05302160 | 0.97498157 |
-| 3 | MFA | 0.00581159 | 0.05302160 | 0.97498157 |
-| 4 | NMF | 0.04967459 | 0.15526001 | 0.78615477 |
-
-### test
-
-| rank | method | mse | mae | r2 |
-|---:|---|---:|---:|---:|
-| 1 | AE | 0.02288310 | 0.08813100 | 0.96718314 |
-| 2 | PCA | 0.02355766 | 0.09504713 | 0.96621575 |
-| 3 | MFA | 0.02355766 | 0.09504713 | 0.96621575 |
-| 4 | NMF | 0.11336321 | 0.21860837 | 0.83742477 |

@@ -7,10 +7,14 @@ import os
 import sys
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 
 os.environ.setdefault("PANDAS_NO_IMPORT_PYARROW", "1")
 import pandas as pd
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -97,13 +101,22 @@ def _evaluate_all(
 
 def _to_markdown(report: pd.DataFrame, settings: list[dict[str, int | str]]) -> str:
     lines = ["# Factor Methods Comparison", ""]
+    lines.append("## Reconstruction Error Metric")
+    lines.append("")
+    lines.append("- MSE = mean((y_true - y_hat)^2) over all timestamps and tenors in each split.")
+    lines.append("- MAE = mean(|y_true - y_hat|) over all timestamps and tenors in each split.")
+    lines.append("- R2 = 1 - sum((y_true - y_hat)^2) / sum((y_true - mean(y_true))^2).")
+    lines.append("- Ranking priority in this report: lower MSE first, then lower MAE.")
+    lines.append("")
     lines.append("## Datasets")
     lines.append("")
-    lines.append("| dataset | n_samples | n_tenors | tenor_span_months | train_end | val_end |")
-    lines.append("|---|---:|---:|---|---|---|")
+    lines.append(
+        "| dataset | n_samples | n_tenors | tenor_span_months | source_period | dy_period | train/val/test_periods |"
+    )
+    lines.append("|---|---:|---:|---|---|---|---|")
     for s in settings:
         lines.append(
-            f"| {s['dataset']} | {s['n_samples']} | {s['n_tenors']} | {s['tenor_span']} | {s['train_end']} | {s['val_end']} |"
+            f"| {s['dataset']} | {s['n_samples']} | {s['n_tenors']} | {s['tenor_span']} | {s['source_period']} | {s['dy_period']} | {s['split_periods']} |"
         )
     lines.append("")
 
@@ -135,7 +148,85 @@ def _prepare_dataset(raw_path: Path, train_end: str, val_end: str):
     dy = to_yield_changes(yields).dropna(how="any")
     train, val, test = time_split(dy, train_end=train_end, val_end=val_end)
     train_z, (val_z, test_z), _, _ = standardize_train_apply(train, [val, test])
-    return train_z, val_z, test_z
+    split_periods = (
+        f"train:{train.index.min().date()}..{train.index.max().date()} ({len(train)}); "
+        f"val:{val.index.min().date()}..{val.index.max().date()} ({len(val)}); "
+        f"test:{test.index.min().date()}..{test.index.max().date()} ({len(test)})"
+    )
+    meta = {
+        "source_period": f"{yields.index.min().date()}..{yields.index.max().date()}",
+        "dy_period": f"{dy.index.min().date()}..{dy.index.max().date()}",
+        "split_periods": split_periods,
+    }
+    return train_z, val_z, test_z, meta
+
+
+def _plot_mse_bars(report: pd.DataFrame, out_path: Path) -> None:
+    datasets = sorted(report["dataset"].unique())
+    splits = ["train", "val", "test"]
+    methods = ["PCA", "AE", "MFA", "NMF"]
+    colors = {"PCA": "#1f77b4", "AE": "#ff7f0e", "MFA": "#2ca02c", "NMF": "#d62728"}
+
+    fig, axes = plt.subplots(len(datasets), 1, figsize=(10, 4.2 * len(datasets)), squeeze=False)
+    for i, dataset in enumerate(datasets):
+        ax = axes[i, 0]
+        sub = report[report["dataset"] == dataset]
+        x = np.arange(len(splits))
+        width = 0.18
+        for j, method in enumerate(methods):
+            vals = []
+            for split in splits:
+                row = sub[(sub["split"] == split) & (sub["method"] == method)]
+                vals.append(float(row["mse"].iloc[0]))
+            ax.bar(x + (j - 1.5) * width, vals, width=width, label=method, color=colors[method])
+        ax.set_xticks(x)
+        ax.set_xticklabels(splits)
+        ax.set_ylabel("MSE")
+        ax.set_title(f"{dataset}: Reconstruction MSE by Method and Split")
+        ax.grid(axis="y", alpha=0.25)
+        ax.legend(ncols=4)
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+
+
+def _plot_pca_scree(X_train: pd.DataFrame, dataset: str, out_path: Path, n_plot: int = 12) -> None:
+    n_plot = max(2, min(n_plot, X_train.shape[1]))
+    pca = fit_pca(X_train, n_components=n_plot)
+    scores = transform_pca(pca, X_train)
+
+    if hasattr(pca, "explained_variance_ratio_"):
+        ratio = np.asarray(getattr(pca, "explained_variance_ratio_"), dtype=float)
+    else:
+        total_var = float(X_train.var(axis=0, ddof=0).sum())
+        comp_var = scores.var(axis=0, ddof=0).values
+        ratio = comp_var / total_var if total_var > 0 else np.zeros_like(comp_var)
+
+    cum = np.cumsum(ratio)
+    k = np.arange(1, len(ratio) + 1)
+
+    fig, ax1 = plt.subplots(figsize=(9, 4.8))
+    ax1.bar(k, ratio, color="#4c72b0", alpha=0.85, label="Explained variance ratio")
+    ax1.set_xlabel("Principal Component")
+    ax1.set_ylabel("Explained Variance Ratio")
+    ax1.set_xticks(k)
+    ax1.grid(axis="y", alpha=0.25)
+
+    ax2 = ax1.twinx()
+    ax2.plot(k, cum, color="#dd8452", marker="o", linewidth=2.0, label="Cumulative explained variance")
+    ax2.set_ylabel("Cumulative Explained Variance")
+    ax2.set_ylim(0.0, 1.02)
+
+    lines_1, labels_1 = ax1.get_legend_handles_labels()
+    lines_2, labels_2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="lower right")
+    ax1.set_title(f"{dataset}: PCA Scree Plot")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -154,22 +245,30 @@ def main() -> None:
         default=2,
         help="Latent dimension to use for all methods (capped by n_tenors).",
     )
+    parser.add_argument(
+        "--plot-components",
+        type=int,
+        default=12,
+        help="Number of PCs shown in scree plot.",
+    )
     args = parser.parse_args()
 
     paths = default_paths()
     all_reports: list[pd.DataFrame] = []
     settings: list[dict[str, int | str]] = []
+    train_data_by_dataset: dict[str, pd.DataFrame] = {}
 
     for raw_name in args.raw_files:
         raw_path = paths["data_raw"] / raw_name
         if not raw_path.exists():
             raise FileNotFoundError(f"Missing input file: {raw_path}")
 
-        X_train, X_val, X_test = _prepare_dataset(
+        X_train, X_val, X_test, meta = _prepare_dataset(
             raw_path=raw_path, train_end=args.train_end, val_end=args.val_end
         )
         n_components = min(args.n_components, X_train.shape[1])
         dataset = raw_path.stem
+        train_data_by_dataset[dataset] = X_train
         report_ds = _evaluate_all(
             X_train, X_val, X_test, n_components=n_components, dataset=dataset
         )
@@ -180,8 +279,9 @@ def main() -> None:
                 "n_samples": int(len(X_train) + len(X_val) + len(X_test)),
                 "n_tenors": int(X_train.shape[1]),
                 "tenor_span": f"{int(min(X_train.columns))}-{int(max(X_train.columns))}",
-                "train_end": args.train_end,
-                "val_end": args.val_end,
+                "source_period": meta["source_period"],
+                "dy_period": meta["dy_period"],
+                "split_periods": meta["split_periods"],
             }
         )
 
@@ -196,9 +296,24 @@ def main() -> None:
     report.to_csv(csv_path, index=False)
     md_path.write_text(_to_markdown(report, settings=settings), encoding="utf-8")
 
+    fig_dir = paths["results_figures"]
+    fig_mse_path = fig_dir / "factor_method_mse.png"
+    _plot_mse_bars(report, out_path=fig_mse_path)
+    for dataset, X_train in train_data_by_dataset.items():
+        _plot_pca_scree(
+            X_train=X_train,
+            dataset=dataset,
+            out_path=fig_dir / f"pca_scree_{dataset}.png",
+            n_plot=args.plot_components,
+        )
+
     print("Saved comparison report:")
     print(" -", csv_path)
     print(" -", md_path)
+    print("Saved figures:")
+    print(" -", fig_mse_path)
+    for dataset in sorted(train_data_by_dataset):
+        print(" -", fig_dir / f"pca_scree_{dataset}.png")
     print("")
     print(report.to_string(index=False))
 
