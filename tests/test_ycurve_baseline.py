@@ -5,7 +5,7 @@ import pandas as pd
 
 from ycurve.backtest.metrics import max_drawdown, sharpe
 from ycurve.backtest.pnl import pnl_from_dy
-from ycurve.factors.ae import LinearAutoencoder
+from ycurve.factors.ae import LinearAutoencoder, select_autoencoder_by_validation
 from ycurve.factors.mfa import fit_mfa, transform as transform_mfa
 from ycurve.factors.nmf import fit_nmf, transform as transform_nmf
 from ycurve.io.load import load_liu_wu
@@ -81,3 +81,30 @@ def test_factor_placeholders_smoke() -> None:
     nmf = fit_nmf(X, n_components=2, random_state=1, max_iter=100)
     g = transform_nmf(nmf, X)
     assert g.shape == (8, 2)
+
+
+def test_ae_validation_selection_smoke() -> None:
+    idx = pd.date_range("2022-01-01", periods=10, freq="D")
+    X = pd.DataFrame(
+        {
+            24: np.linspace(0.0, 1.0, 10),
+            60: np.linspace(0.1, 1.1, 10),
+            120: np.linspace(0.2, 1.2, 10),
+        },
+        index=idx,
+    )
+    X_train = X.iloc[:7]
+    X_val = X.iloc[7:]
+
+    model, summary = select_autoencoder_by_validation(
+        X_train,
+        X_val,
+        latent_grid=[1, 2, 3],
+        epochs=50,
+        random_state=1,
+    )
+
+    assert summary.shape[0] == 3
+    assert int(summary.iloc[0]["n_latent"]) in [1, 2, 3]
+    X_hat = model.decode(model.encode(X_val))
+    assert X_hat.shape == X_val.shape

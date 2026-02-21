@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ycurve.config import default_paths
-from ycurve.factors.ae import LinearAutoencoder
+from ycurve.factors.ae import select_autoencoder_by_validation
 from ycurve.factors.mfa import fit_mfa, reconstruct as reconstruct_mfa, transform as transform_mfa
 from ycurve.factors.nmf import fit_nmf, reconstruct as reconstruct_nmf, transform as transform_nmf
 from ycurve.factors.pca import fit_pca, reconstruct as reconstruct_pca, transform as transform_pca
@@ -46,6 +46,7 @@ def _evaluate_all(
     X_val: pd.DataFrame,
     X_test: pd.DataFrame,
     n_components: int,
+    ae_latent_grid: list[int],
     dataset: str,
 ) -> pd.DataFrame:
     records: list[dict[str, float | str]] = []
@@ -58,8 +59,10 @@ def _evaluate_all(
         m = _metrics(X, x_hat)
         records.append({"dataset": dataset, "method": "PCA", "split": split_name, **m})
 
-    ae = LinearAutoencoder(
-        n_latent=n_components,
+    ae, ae_selection = select_autoencoder_by_validation(
+        X_train=X_train,
+        X_val=X_val,
+        latent_grid=ae_latent_grid,
         activation="tanh",
         learning_rate=3e-4,
         epochs=1200,
@@ -71,12 +74,21 @@ def _evaluate_all(
         early_stop_patience=80,
         grad_clip=0.0,
         random_state=7,
-    ).fit(X_train)
+    )
+    ae_best_k = int(ae_selection.iloc[0]["n_latent"])
     for split_name, X in [("train", X_train), ("val", X_val), ("test", X_test)]:
         z = ae.encode(X)
         x_hat = ae.decode(z)
         m = _metrics(X, x_hat)
-        records.append({"dataset": dataset, "method": "AE", "split": split_name, **m})
+        records.append(
+            {
+                "dataset": dataset,
+                "method": "AE",
+                "split": split_name,
+                "ae_n_latent": ae_best_k,
+                **m,
+            }
+        )
 
     mfa = fit_mfa(X_train, n_components=n_components, random_state=7)
     for split_name, X in [("train", X_train), ("val", X_val), ("test", X_test)]:
@@ -251,6 +263,14 @@ def main() -> None:
         default=12,
         help="Number of PCs shown in scree plot.",
     )
+    parser.add_argument(
+        "--ae-latent-grid",
+        default="",
+        help=(
+            "Comma-separated latent dimensions for AE bottleneck search "
+            "(example: '1,2,3,4'). Empty means auto grid 1..min(n_tenors, max(n_components+3, 6))."
+        ),
+    )
     args = parser.parse_args()
 
     paths = default_paths()
@@ -267,10 +287,20 @@ def main() -> None:
             raw_path=raw_path, train_end=args.train_end, val_end=args.val_end
         )
         n_components = min(args.n_components, X_train.shape[1])
+        if args.ae_latent_grid.strip():
+            ae_latent_grid = [int(tok.strip()) for tok in args.ae_latent_grid.split(",") if tok.strip()]
+        else:
+            max_latent = min(X_train.shape[1], max(n_components + 3, 6))
+            ae_latent_grid = list(range(1, max_latent + 1))
         dataset = raw_path.stem
         train_data_by_dataset[dataset] = X_train
         report_ds = _evaluate_all(
-            X_train, X_val, X_test, n_components=n_components, dataset=dataset
+            X_train,
+            X_val,
+            X_test,
+            n_components=n_components,
+            ae_latent_grid=ae_latent_grid,
+            dataset=dataset,
         )
         all_reports.append(report_ds)
         settings.append(

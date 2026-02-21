@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -153,7 +154,8 @@ class NonlinearAutoencoder:
         if self._w1 is None or self._b1 is None or self._w2 is None or self._b2 is None:
             raise ValueError("Model not fitted. Call fit() first.")
         h1 = self._activate(X.values.astype(float) @ self._w1 + self._b1)
-        z = self._activate(h1 @ self._w2 + self._b2)
+        # Keep bottleneck linear to match training forward pass.
+        z = h1 @ self._w2 + self._b2
         cols = [f"Z{i + 1}" for i in range(z.shape[1])]
         return pd.DataFrame(z, index=X.index, columns=cols)
 
@@ -201,6 +203,66 @@ class NonlinearAutoencoder:
         z = h1 @ params["w2"] + params["b2"]
         h2 = self._activate(z @ params["w3"] + params["b3"])
         return h2 @ params["w4"] + params["b4"]
+
+
+def reconstruction_mse(model: NonlinearAutoencoder, X: pd.DataFrame) -> float:
+    """Compute reconstruction MSE for a fitted autoencoder on a dataset."""
+    z = model.encode(X)
+    x_hat = model.decode(z)
+    return float(np.mean((x_hat.values - X.values) ** 2))
+
+
+def select_autoencoder_by_validation(
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+    latent_grid: list[int],
+    *,
+    refit_on_train_val: bool = False,
+    **autoencoder_kwargs: Any,
+) -> tuple[NonlinearAutoencoder, pd.DataFrame]:
+    """Pick bottleneck size by validation MSE.
+
+    Returns
+    -------
+    tuple[NonlinearAutoencoder, pd.DataFrame]
+        Fitted best model and per-candidate metrics.
+    """
+    if len(latent_grid) == 0:
+        raise ValueError("latent_grid must contain at least one candidate latent dimension.")
+
+    n_features = X_train.shape[1]
+    valid_grid = sorted({k for k in latent_grid if 1 <= k <= n_features})
+    if len(valid_grid) == 0:
+        raise ValueError(
+            f"No valid latent dimensions in grid for n_features={n_features}. "
+            "Each candidate must be between 1 and n_features."
+        )
+
+    rows: list[dict[str, float | int]] = []
+    best_model: NonlinearAutoencoder | None = None
+    best_val_mse = np.inf
+    best_k = -1
+
+    for k in valid_grid:
+        model = NonlinearAutoencoder(n_latent=k, **autoencoder_kwargs).fit(X_train)
+        train_mse = reconstruction_mse(model, X_train)
+        val_mse = reconstruction_mse(model, X_val)
+        rows.append({"n_latent": k, "train_mse": train_mse, "val_mse": val_mse})
+
+        if val_mse < best_val_mse - 1e-12 or (abs(val_mse - best_val_mse) <= 1e-12 and k < best_k):
+            best_val_mse = val_mse
+            best_k = k
+            best_model = model
+
+    if best_model is None:
+        raise RuntimeError("Failed to select autoencoder model from latent grid.")
+
+    if refit_on_train_val:
+        merged = pd.concat([X_train, X_val], axis=0)
+        best_model = NonlinearAutoencoder(n_latent=best_k, **autoencoder_kwargs).fit(merged)
+
+    summary = pd.DataFrame(rows).sort_values(["val_mse", "train_mse", "n_latent"]).reset_index(drop=True)
+    return best_model, summary
 
 
 # Backward-compatible alias retained for existing imports/tests.
