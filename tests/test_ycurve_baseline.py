@@ -5,7 +5,11 @@ import pandas as pd
 
 from ycurve.backtest.metrics import max_drawdown, sharpe
 from ycurve.backtest.pnl import pnl_from_dy
-from ycurve.factors.ae import LinearAutoencoder, select_autoencoder_by_validation
+from ycurve.factors.ae import (
+    LinearAutoencoder,
+    decoder_jacobian,
+    select_autoencoder_by_validation,
+)
 from ycurve.factors.mfa import fit_mfa, transform as transform_mfa
 from ycurve.factors.nmf import fit_nmf, transform as transform_nmf
 from ycurve.io.load import load_liu_wu
@@ -108,3 +112,20 @@ def test_ae_validation_selection_smoke() -> None:
     assert int(summary.iloc[0]["n_latent"]) in [1, 2, 3]
     X_hat = model.decode(model.encode(X_val))
     assert X_hat.shape == X_val.shape
+
+
+def test_ae_decoder_jacobian_shape_smoke() -> None:
+    idx = pd.date_range("2022-02-01", periods=6, freq="D")
+    X = pd.DataFrame(
+        {
+            24: np.linspace(0.0, 0.5, 6),
+            60: np.linspace(0.2, 0.7, 6),
+            120: np.linspace(0.4, 0.9, 6),
+        },
+        index=idx,
+    )
+    model = LinearAutoencoder(n_latent=2, epochs=40, random_state=1).fit(X)
+    J = decoder_jacobian(model, X)
+
+    assert J.shape == (6, 2, 3)
+    assert np.isfinite(J).all()

@@ -212,6 +212,38 @@ def reconstruction_mse(model: NonlinearAutoencoder, X: pd.DataFrame) -> float:
     return float(np.mean((x_hat.values - X.values) ** 2))
 
 
+def decoder_jacobian(model: NonlinearAutoencoder, X: pd.DataFrame) -> np.ndarray:
+    """Return decoder Jacobian ``d x_hat / d z`` for each row in ``X``.
+
+    Output shape is ``(n_samples, n_latent, n_features)``.
+    """
+    if (
+        model._w1 is None
+        or model._b1 is None
+        or model._w2 is None
+        or model._b2 is None
+        or model._w3 is None
+        or model._b3 is None
+        or model._w4 is None
+    ):
+        raise ValueError("Model not fitted. Call fit() first.")
+
+    x = X.values.astype(float)
+    h1_pre = x @ model._w1 + model._b1
+    h1 = model._activate(h1_pre)
+    z = h1 @ model._w2 + model._b2
+    h2_pre = z @ model._w3 + model._b3
+    g2 = model._activate_grad(h2_pre)
+
+    n_samples = x.shape[0]
+    n_latent = model._w2.shape[1]
+    n_features = x.shape[1]
+    out = np.zeros((n_samples, n_latent, n_features), dtype=float)
+    for i in range(n_samples):
+        out[i] = (model._w3 * g2[i][None, :]) @ model._w4
+    return out
+
+
 def select_autoencoder_by_validation(
     X_train: pd.DataFrame,
     X_val: pd.DataFrame,
